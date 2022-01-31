@@ -1,6 +1,7 @@
 # Importing external packages
 from prettytable import PrettyTable
 import salabim as sim
+from opcua import ua, Server
 
 
 class RealTimeEnvironment(sim.Environment):
@@ -10,16 +11,46 @@ class RealTimeEnvironment(sim.Environment):
         print("Current Animation Time: ", current_time)
 
 
-class Server(sim.Component):
+class OpcServer(sim.Component):
     """
     This class is used to represent a centralized data server, through which other 3rd party applications
     can get access to the data. In future this could be implemented as OPC/ MtConnect server.
     """
+    def __init__(self, *args, **kwargs):
+        sim.Component.__init__(self, *args, **kwargs)
+        server = Server()
+        server.set_endpoint("opc.tcp://localhost:4840/freeopcua/server/")
+
+        # setup our own namespace, not really necessary but should as spec
+        uri = "factory_namespace"
+        server_namespace = server.register_namespace(uri)
+
+        self._opc_server = server
+
+        # get Objects node, this is where we should put our nodes
+        objects = server.get_objects_node()
+        self._opc_machine_objects = []
+        for index, machine in enumerate(UNITS_OF_FACTORY):
+
+            # populating our address space
+            machine_name = "my_machine_" + str(index)
+            current_machine = objects.add_object(server_namespace, machine_name)
+            current_machine.add_variable(server_namespace, "machine_id", index)
+            current_part_count = current_machine.add_variable(server_namespace, "part_count", 0)
+            current_cycle_time = current_machine.add_variable(server_namespace, "cycle_time", 0.0)
+            current_operating_time = current_machine.add_variable(server_namespace, "operating_time", 0.0)
+
+            current_part_count.set_writable()  # Set MyVariable to be writable by clients
+            current_cycle_time.set_writable()  # Set MyVariable to be writable by clients
+            current_operating_time.set_writable()  # Set MyVariable to be writable by clients
+            self._opc_machine_objects.append(current_machine)
+
+        server.start()
 
     def process(self):
         while True:
             # Creating a pretty table.
-            table = PrettyTable(["S.No", "Machine Id", "Part Count", "Cycle Time", "Operating Time"])
+            table = PrettyTable(["Machine Id", "Part Count", "Cycle Time", "Operating Time"])
 
             for index, machine in enumerate(UNITS_OF_FACTORY):
 
@@ -32,9 +63,13 @@ class Server(sim.Component):
                     cycle_time = ENVIRONMENT.now() - machine.cycle_time_start
                     machine.cycle_time = cycle_time
                     operating_time += cycle_time
-
-                table.add_row([index, machine.machine_id, machine.parts, round(cycle_time, 2),
-                               round(operating_time, 2)])
+                machine_data = [machine.machine_id, machine.parts, round(cycle_time, 2),
+                                round(operating_time, 2)]
+                table.add_row(machine_data)
+                opc_machine = self._opc_machine_objects[index]
+                machine_parameters = opc_machine.get_children()
+                for inner_index in range(1, len(machine_parameters)):
+                    machine_parameters[inner_index].set_value(machine_data[inner_index])
 
             print("==========================================================================================")
             print()
@@ -43,6 +78,8 @@ class Server(sim.Component):
             print()
             print("==========================================================================================")
             yield self.hold(1)
+            if ENVIRONMENT.now() == 299:
+                self._opc_server.stop()
 
 
 class Machine(sim.Component):
@@ -223,6 +260,6 @@ ENVIRONMENT.root.withdraw()
 
 UNITS_OF_FACTORY = create_machining_units(4)
 PartGenerator(PRODUCTION_PLAN)
-Server()
+OpcServer()
 
-ENVIRONMENT.run()
+ENVIRONMENT.run(till=300)
