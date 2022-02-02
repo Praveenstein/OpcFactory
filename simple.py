@@ -1,40 +1,18 @@
 # Car.py
 import salabim as sim
-
-
-class RealTimeEnvironment(sim.Environment):
-
-    def __init__(self, counter, *args, **kwargs):
-        sim.Environment.__init__(self, *args, **kwargs)
-        self.counter = counter
-
-    def animation_pre_tick(self, current_time):
-        self.counter += 1
-        print(self.counter)
-        print("===============================================")
-        print("Current Animation Time", current_time)
-        print("===============================================")
+import time
 
 
 class Car(sim.Component):
-
     def process(self):
         while True:
-
-            print("********************************************")
-            print("Current Environment Time: ", ENVIRONMENT.now())
-            print("********************************************")
+            time.sleep(1)
             yield self.hold(1)
 
 
-ENVIRONMENT = RealTimeEnvironment(counter=0)
-ENVIRONMENT.animate(True)
-ENVIRONMENT.animation_parameters(fps=1, synced=True)
-
-# This makes the animation window invisible
-ENVIRONMENT.root.withdraw()
-
+env = sim.Environment(trace=True)
 Car()
-
-ENVIRONMENT.run(till=30)
-
+try:
+    env.run(till=5)
+except KeyboardInterrupt:
+    print("NOT OK")
