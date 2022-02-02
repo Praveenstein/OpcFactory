@@ -1,23 +1,59 @@
+# -*- coding: utf-8 -*-
+"""
+OpcFactory Core Classes
+============================
+
+This script contains the core classes required for the simulated factory
+
+This script requires the following modules be installed in the python environment
+    * salabim - A Object oriented discrete event simulation and animation in Python. It includes process control
+    features, resources, queues, monitors, statistical distributions.
+    * asyncua - An asyncio-based asynchronous OPC UA client and server, based on python-opcua
+
+    * keyboard - Module for keyboard interaction
+    *prettytable - Module to prints data in a pretty table format
+
+This script contains the following classes
+    * RealTimeEnvironment - Class that inherits sim.Environment, with few additonal attributes, methods to make
+    the simulation run in real time
+
+    * OpcServer - This class is used to represent a centralized OPC server in the simulated environment
+    which will be a component in the simulation environment and update the actual opc server's data
+
+    * Machine - This class is used to represent a machine in the simulation environment
+    * Part - This class is used for representing a Part that needs to be manufactured.
+    * PartGenerator - This class is used for creating new parts according to production plan.
+
+This script contains the following functions
+    * create_machining_units - Function used to create a given number of  machines.
+    * create_opc_server - Function used to create actual opc server to be used by simulated opc server
+     in salabim environment.
+    * main - Main function to run the simulation
+"""
+
 # Standard Built_In Packages
 import sys
 
-# Importing external packages
-import keyboard
-from prettytable import PrettyTable
+# Core packages required for the Script
 import salabim as sim
 from asyncua.sync import Server
 
+# Other external packages
+import keyboard
+from prettytable import PrettyTable
+
 
 class RealTimeEnvironment(sim.Environment):
+    """
+    New class for simulating real time environment, i.e the simulation will happen real time rather than
+    completing the whole simulation in few seconds, every second data will be updated
+    """
 
     def __init__(self, animation=True, animation_fps=1,
                  animation_synced=True, animation_visibility=False, number_of_machines=4,
                  production_plan=(("Part 0", 100000, 10, [[0, 2]]), ("Part 1", 200000, 10, [[1, 4]])),
                  *args, **kwargs):
         """
-        New class for simulating real time environment, i.e the simulation will happen real time rather than
-        completing the whole simulation in few seconds, every second data will be updated
-
         :param animation: Parameter to set whether animation has be set, default is true, which is essential for
         real time simulation
         :type animation: bool
@@ -44,6 +80,9 @@ class RealTimeEnvironment(sim.Environment):
         # Default factory environment attributes
         self.units_of_factory = {"machines": None, "part_generator": [], "opc_server": []}
 
+        # Initializing the super class has to done only after initializing the above attributes
+        # Because during the super's initializing the setup function(immediately after) is run where the above
+        # Attributes are required, hence an error is raised saying the above attribute is not there.
         sim.Environment.__init__(self, *args, **kwargs)
 
         # Setting up animation parameters
@@ -60,16 +99,41 @@ class RealTimeEnvironment(sim.Environment):
             self.root.withdraw()
 
     def setup(self):
+        """
+        This function is run immediately after the initialization of the object is done
+        :return: Nothing
+        :rtype: None
+        """
+
+        # Creating new machines
         self.units_of_factory["machines"] = create_machining_units(self.number_of_machines, self)
+
+        # Creating a new part generator
         self.units_of_factory["part_generator"].append(PartGenerator(self.production_plan, self))
 
+        # Creating an actual opc server
         self.opc_server, self.opc_namespace = create_opc_server()
+
+        # Creating a salabim simulated opc server and appending it to the environment's attribute
         self.units_of_factory["opc_server"].append(OpcServer(self, self.opc_server, self.opc_namespace))
 
     def animation_pre_tick(self, current_time):
+        """
+        This function is what makes this simulation real time. If this function is not written (overwritten) then
+        the whole simulation (even for large time units) will be finished in few seconds and the summary results
+        will be shown. Hence we create an animation, which allows us to call this function just before a new frame
+        for animation is created ( which will be 1 fps and synced with actual real clock). This doesn't actually
+        show any animation as we have set the visibility to false and no animation objects are created, it just prints
+        the current animation time (which is synced/equal to the working device's local time)
+
+        :param current_time: The current animation time
+        :type current_time: float
+        :return: Nothing
+        :rtype: None
+        """
         if keyboard.is_pressed("q"):
             self.opc_server.stop()
-            print("System Interrupted")
+            print("Simulation Interrupted")
             sys.exit()
         print("Current Animation Time: ", current_time)
 
@@ -93,13 +157,21 @@ class RealTimeEnvironment(sim.Environment):
 
 class OpcServer(sim.Component):
     """
-    This class is used to represent a centralized data server, through which other 3rd party applications
-    can get access to the data. In future this could be implemented as OPC/ MtConnect server.
+    This class is used to represent a centralized OPC server in the simulated environment which will be a component
+    in the simulation environment and update the actual opc server's data
     """
 
     def __init__(self, environment, server, namespace, *args, **kwargs):
-        sim.Component.__init__(self, *args, **kwargs)
+        """
+        :param environment: The environment this component is part of
+        :type environment:
+        :param server: The actual opc server
+        :type server:
+        :param namespace: The actual Opc server's namespace
+        :type namespace:
+        """
 
+        sim.Component.__init__(self, *args, **kwargs)
         # Attributes from the given arguments.
         self.environment = environment
         self._opc_server = server
@@ -113,6 +185,7 @@ class OpcServer(sim.Component):
         # get Objects node, this is where we should put our nodes
         root_objects = server.nodes.objects
         for index, machine in enumerate(self.simulated_machines):
+
             # populating our address space
             machine_name = "my_machine_" + str(index)
             current_machine = root_objects.add_object(namespace, machine_name)
@@ -129,12 +202,21 @@ class OpcServer(sim.Component):
         server.start()
 
     def process(self):
+        """
+        As soon as this component is created in the salabim environment this process will be activated(called)
+        Here is where we put the logic to update all the machine parameters by accessing their attribute
+        and updating those values in the actual OPC server.
+
+        :return: Nothing
+        :rtype: None
+        """
         while True:
             # Creating a pretty table.
             table = PrettyTable(["Machine Id", "Part Count", "Cycle Time", "Operating Time"])
 
             for index, machine in enumerate(self.simulated_machines):
 
+                # For every machine in the simulation environment we perform the following operations
                 cycle_time = machine.cycle_time
                 operating_time = machine.operating_time
                 if machine.machine_status == 1:
@@ -149,6 +231,7 @@ class OpcServer(sim.Component):
                 table.add_row(machine_data)
                 opc_machine = self._opc_machine_objects[index]
                 machine_parameters = opc_machine.get_children()
+
                 for inner_index in range(1, len(machine_parameters)):
                     machine_parameters[inner_index].write_value(machine_data[inner_index])
 
@@ -162,8 +245,19 @@ class OpcServer(sim.Component):
 
 
 class Machine(sim.Component):
+    """
+    This class is used to represent a machine in the simulation environment
+    """
 
     def __init__(self, machine_name, machine_id, environment, *args, **kwargs):
+        """
+        :param machine_name: Name of the machine
+        :type machine_name: str
+        :param machine_id: Machine Id
+        :type machine_id: int
+        :param environment: The simulation environment his component is part of
+        :type environment:
+        """
         sim.Component.__init__(self, *args, **kwargs)
 
         # Attributes from the given arguments.
@@ -282,7 +376,7 @@ class Part(sim.Component):
 
 class PartGenerator(sim.Component):
     """
-    This class is used for creating new parts according to schedule.
+    This class is used for creating new parts according to production plan.
     """
 
     def __init__(self, part_details, environment, *args, **kwargs):
@@ -331,7 +425,7 @@ def create_machining_units(number_of_units, environment):
     return machining_units
 
 
-def create_opc_server(server_url="opc.tcp://localhost:4840/freeopcua/server/", name_space="factory_namespace"):
+def create_opc_server(server_url="opc.tcp://172.18.7.27:4840", name_space="factory_namespace"):
     """
     Function used to create actual opc server to be used by simulated opc server in salabim environment
 
@@ -359,15 +453,15 @@ def main():
 
     # The current production plan consist of making 4 parts and the corresponding details are given below
     # Part Name, Part Family Number, Quantity, Machining Sequence [Machine Id, Machining Time]
-    production_plan = [["Part 0", 100000, 1, [[0, 2], [1, 4], [2, 3], [3, 5]]],
-                       ["Part 1", 200000, 1, [[1, 3], [0, 1], [2, 4], [3, 2]]],
-                       ["Part 2", 300000, 1, [[2, 4], [1, 5], [0, 3], [3, 2]]],
-                       ["Part 3", 400000, 1, [[3, 5], [2, 1], [0, 4], [1, 4]]]]
+    production_plan = [["Part 0", 100000, 100, [[0, 2], [1, 4], [2, 3], [3, 5]]],
+                       ["Part 1", 200000, 100, [[1, 3], [0, 1], [2, 4], [3, 2]]],
+                       ["Part 2", 300000, 100, [[2, 4], [1, 5], [0, 3], [3, 2]]],
+                       ["Part 3", 400000, 100, [[3, 5], [2, 1], [0, 4], [1, 4]]]]
 
     environment = RealTimeEnvironment(production_plan=production_plan)
 
     try:
-        environment.run(till=100)
+        environment.run()
         print("Simulation Successfully Over")
     except KeyboardInterrupt:
         print("Simulation Interrupted")
